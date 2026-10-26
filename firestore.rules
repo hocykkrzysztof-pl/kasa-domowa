@@ -51,11 +51,12 @@ service cloud.firestore {
       return h.owner == request.auth.uid;
     }
 
-    function onlyLimits() {
+    // domownik może zmieniać tylko kategorie i limity
+    function onlyCats() {
       return request.resource.data
         .diff(resource.data)
         .affectedKeys()
-        .hasOnly(['limits']);
+        .hasOnly(['limits', 'cats']);
     }
 
     match /households/{hid} {
@@ -70,12 +71,13 @@ service cloud.firestore {
         && request.resource.data.limits is map;
 
       // właściciel zmienia wszystko oprócz właściciela,
-      // domownik tylko limity
+      // domownik tylko kategorie i limity
       allow update: if isMember(resource.data)
         && request.resource.data.owner == resource.data.owner
         && request.resource.data.members is list
         && request.resource.data.limits is map
-        && (isOwner(resource.data) || onlyLimits());
+        && request.resource.data.get('cats', {}) is map
+        && (isOwner(resource.data) || onlyCats());
 
       match /tx/{tid} {
         allow read, delete: if isMember(house(hid));
