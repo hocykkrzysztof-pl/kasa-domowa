@@ -159,7 +159,15 @@ form { display: grid; gap: 10px; }
 .pill.bad { background: var(--bad-soft); color: var(--bad); }
 .cat-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--ink-3); }
 .limit-input { width: 110px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--sheet); font-family: var(--f-mono); text-align: right; }
-.limits-actions { display: flex; gap: 10px; align-items: center; }
+.limits-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cat-edit { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px; gap: 8px; align-items: center; padding: 3px 0; }
+.cat-edit.inc { grid-template-columns: minmax(0, 1fr) 30px; }
+.cat-edit .lim { display: flex; align-items: center; gap: 6px; }
+.cat-edit .limit-input { width: 96px; }
+.name-input { width: 100%; min-width: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--sheet); }
+.name-input:focus, .limit-input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+#cats .label { margin: 6px 0 2px; }
+#cats .link { justify-self: start; }
 .ghost { border: 1px solid var(--line); background: transparent; padding: 9px 14px; border-radius: 9px; }
 
 /* Chart */
@@ -289,8 +297,8 @@ body { margin: 0; padding-top: env(safe-area-inset-top, 0px); padding-bottom: en
     <div style="display:grid; gap:20px; min-width:0">
       <section class="panel" aria-labelledby="cats-h">
         <div class="panel-head">
-          <h2 id="cats-h">Limity kategorii</h2>
-          <button class="link" id="edit-limits">Zmień limity</button>
+          <h2 id="cats-h">Kategorie i limity</h2>
+          <button class="link" id="edit-limits">Edytuj kategorie</button>
         </div>
         <div id="cats" class="cats"></div>
       </section>
@@ -359,6 +367,14 @@ const EXP = [
 const INC = [["pensja", "Wynagrodzenie"], ["premia", "Premia i dodatki"], ["inne_p", "Inne przychody"]];
 const CAT_NAME = Object.fromEntries([...EXP.map(c => [c[0], c[1]]), ...INC]);
 const DEFAULT_LIMITS = Object.fromEntries(EXP.map(c => [c[0], c[2]]));
+const DEFAULT_CATS = { exp: EXP.map(([id, name]) => ({ id, name })), inc: INC.map(([id, name]) => ({ id, name })) };
+// kategorie zapisane w budżecie; usunięte mają del: true, żeby stare wpisy zachowały nazwę
+const cats = () => (state.house && state.house.cats) || DEFAULT_CATS;
+const activeCats = type => (cats()[type] || []).filter(c => !c.del);
+function catName(id) {
+  for (const c of [...(cats().exp || []), ...(cats().inc || [])]) if (c.id === id) return c.name;
+  return CAT_NAME[id] || id;
+}
 const MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
 const MONTHS_GEN = ["stycznia","lutego","marca","kwietnia","maja","czerwca","lipca","sierpnia","września","października","listopada","grudnia"];
 const WD = ["niedziela","poniedziałek","wtorek","środa","czwartek","piątek","sobota"];
@@ -404,6 +420,7 @@ const state = {
   type: "exp",
   filter: null,
   editLimits: false,
+  draft: null,            // kategorie w trakcie edycji
   gateMsg: "",
 };
 
@@ -471,7 +488,7 @@ function watchMonth() {
 }
 function switchHouse(hid) {
   state.hid = hid;
-  state.filter = null; state.editLimits = false;
+  state.filter = null; stopCatsEdit();
   try { localStorage.setItem("kasa-domowa-budzet-" + state.user.uid, hid); } catch (e) {}
   renderAcct();
   watchHouse();
@@ -585,7 +602,7 @@ function importData(data, withLimits) {
   }
   if (withLimits && data.limits && typeof data.limits === "object") {
     const lim = {};
-    for (const [id, , v] of EXP) { const x = +data.limits[id]; lim[id] = isFinite(x) && x >= 0 ? x : v; }
+    for (const c of activeCats("exp")) { const x = +data.limits[c.id]; lim[c.id] = isFinite(x) && x >= 0 ? x : (+state.limits[c.id] || 0); }
     updateDoc(houseRef(), { limits: lim }).catch(fail);
   }
   return all.length;
@@ -660,7 +677,7 @@ function monthStats(y, m) {
     if (t.t === "inc") inc += t.a;
     else { exp += t.a; byCat[t.c] = (byCat[t.c] || 0) + t.a; byDay[+t.d.slice(8, 10)] += t.a; }
   }
-  const totalLimit = EXP.reduce((s, c) => s + (+state.limits[c[0]] || 0), 0);
+  const totalLimit = activeCats("exp").reduce((sum, c) => sum + (+state.limits[c.id] || 0), 0);
   return { tx, days, isCur, isPast, elapsed, inc, exp, byCat, byDay, totalLimit };
 }
 function status(spent, limit, paceFrac) {
@@ -773,11 +790,14 @@ function renderSummary(s) {
 
 function renderForm(s) {
   const sel = $("f-cat");
-  const list = state.type === "exp" ? EXP : INC;
+  const list = activeCats(state.type);
   const cur = sel.value;
-  const opts = list.map(c => `<option value="${c[0]}">${c[1]}</option>`).join("");
-  if (sel.dataset.type !== state.type) { sel.innerHTML = opts; sel.dataset.type = state.type; }
-  else if (list.some(c => c[0] === cur)) sel.value = cur;
+  const sig = state.type + "|" + list.map(c => c.id + ":" + c.name).join("|");
+  if (sel.dataset.sig !== sig) {
+    sel.innerHTML = list.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+    sel.dataset.sig = sig;
+    if (list.some(c => c.id === cur)) sel.value = cur;
+  }
   const d = $("f-date");
   const { y, m } = state.view;
   const prefix = ym(y, m);
@@ -793,7 +813,7 @@ function renderList(s) {
   const box = $("list");
   const slot = $("filter-slot");
   slot.innerHTML = state.filter
-    ? `<span class="filter-chip">${esc(CAT_NAME[state.filter])}<button id="clear-filter" aria-label="Pokaż wszystkie kategorie">×</button></span>`
+    ? `<span class="filter-chip">${esc(catName(state.filter))}<button id="clear-filter" aria-label="Pokaż wszystkie kategorie">×</button></span>`
     : "";
   if (state.filter) $("clear-filter").onclick = () => { state.filter = null; render(); };
   if (!state.txReady) { box.innerHTML = '<p class="tx-cat">Wczytuję wpisy…</p>'; return; }
@@ -824,7 +844,7 @@ function renderList(s) {
     const sum = g.items.reduce((a, t) => a + (t.t === "exp" ? -t.a : t.a), 0);
     return `<div class="day"><h3><span>${dt.getDate()} ${MONTHS_GEN[dt.getMonth()]}, ${WD[dt.getDay()]}</span><span class="num">${sum > 0 ? "+" : sum < 0 ? "−" : ""}${fmt(Math.abs(sum))}</span></h3>
       ${g.items.map(t => `<div class="tx">
-        <div class="tx-main"><div class="tx-note">${esc(t.n || CAT_NAME[t.c] || "Wpis")}${t.ex ? '<span class="ex-tag">przykład</span>' : ""}</div><div class="tx-cat">${esc(CAT_NAME[t.c] || t.c)}${shared && t.by ? ` · ${esc(t.by.split("@")[0])}` : ""}</div></div>
+        <div class="tx-main"><div class="tx-note">${esc(t.n || catName(t.c) || "Wpis")}${t.ex ? '<span class="ex-tag">przykład</span>' : ""}</div><div class="tx-cat">${esc(catName(t.c))}${shared && t.by ? ` · ${esc(t.by.split("@")[0])}` : ""}</div></div>
         <span class="tx-amt ${t.t === "inc" ? "pos" : ""}">${t.t === "inc" ? "+" : "−"}${fmt(t.a)}</span>
         <button class="tx-del" data-id="${esc(t.id)}" aria-label="Usuń wpis ${esc(t.n || "")}">×</button>
       </div>`).join("")}</div>`;
@@ -833,39 +853,86 @@ function renderList(s) {
 
 function renderCats(s) {
   const box = $("cats");
+  $("edit-limits").textContent = state.editLimits ? "Anuluj" : "Edytuj kategorie";
+  if (state.editLimits) { renderCatsEdit(false); return; }
+  box.dataset.mode = "view";
   const paceFrac = s.isCur ? s.elapsed / s.days : s.isPast ? 1 : 0;
-  $("edit-limits").textContent = state.editLimits ? "Anuluj" : "Zmień limity";
-  if (state.editLimits) {
-    if (box.querySelector(".limit-input")) return;   // nie kasuj tego, co ktoś właśnie wpisuje
-    box.innerHTML = EXP.map(([id, name]) => `<div class="cat" style="cursor:default"><div class="cat-top">
-        <label class="cat-name" for="lim-${id}">${name}</label>
-        <span><input class="limit-input" id="lim-${id}" inputmode="decimal" value="${state.limits[id] ?? 0}"> <span class="tx-cat">zł / mies.</span></span>
-      </div></div>`).join("") +
-      `<div class="limits-actions"><button class="primary" id="save-limits">Zapisz limity</button><button class="ghost" id="reset-limits">Przywróć domyślne</button></div>`;
-    $("save-limits").onclick = () => {
-      const lim = {};
-      for (const [id] of EXP) lim[id] = Math.max(0, parseAmount($("lim-" + id).value) || 0);
-      state.editLimits = false;
-      state.limits = lim;
-      updateDoc(houseRef(), { limits: lim }).catch(fail);
-      render();
-      toast("Zapisano limity");
-    };
-    $("reset-limits").onclick = () => { for (const [id, , v] of EXP) $("lim-" + id).value = v; };
-    return;
-  }
-  const rows = EXP.map(([id, name]) => {
-    const spent = s.byCat[id] || 0, limit = +state.limits[id] || 0;
+  const list = activeCats("exp").slice();
+  // wydatki w usuniętych kategoriach też muszą być widoczne
+  for (const id of Object.keys(s.byCat)) if (!list.some(c => c.id === id)) list.push({ id, name: catName(id), del: true });
+  const rows = list.map(({ id, name, del }) => {
+    const spent = s.byCat[id] || 0, limit = del ? 0 : +state.limits[id] || 0;
     const [cls, txt] = status(spent, limit, paceFrac);
     const w = limit ? Math.min(100, spent / limit * 100) : (spent ? 100 : 0);
-    const leftTxt = !limit ? "brak limitu" : spent <= limit ? `zostało ${fmt(limit - spent)}` : `ponad o ${fmt(spent - limit)}`;
-    return `<button class="cat" data-cat="${id}" aria-pressed="${state.filter === id}">
-      <div class="cat-top"><span class="cat-name">${name}</span><span class="cat-nums"><b>${fmt(spent)}</b> / ${fmt0(limit)}</span></div>
+    const leftTxt = del ? "kategoria usunięta" : !limit ? "brak limitu" : spent <= limit ? `zostało ${fmt(limit - spent)}` : `ponad o ${fmt(spent - limit)}`;
+    return `<button class="cat" data-cat="${esc(id)}" aria-pressed="${state.filter === id}">
+      <div class="cat-top"><span class="cat-name">${esc(name)}</span><span class="cat-nums"><b>${fmt(spent)}</b> / ${fmt0(limit)}</span></div>
       <div class="bar ${cls === "good" ? "" : cls}"><i style="width:${w}%"></i>${paceFrac > 0 && paceFrac < 1 && limit ? `<span class="pace-tick" style="left:${paceFrac * 100}%"></span>` : ""}</div>
       <div class="cat-meta"><span>${leftTxt}</span><span class="pill ${cls}">${cls === "bad" ? "▲ " : cls === "warn" ? "● " : "✓ "}${txt}</span></div>
     </button>`;
   });
   box.innerHTML = rows.join("") + (paceFrac > 0 && paceFrac < 1 ? `<p class="tx-cat" style="margin:6px 0 0">Pionowa kreska na pasku pokazuje, ile miesiąca już minęło (${Math.round(paceFrac * 100)}%). Kliknij kategorię, żeby zobaczyć jej wpisy.</p>` : `<p class="tx-cat" style="margin:6px 0 0">Kliknij kategorię, żeby zobaczyć jej wpisy.</p>`);
+}
+
+function startCatsEdit() {
+  state.draft = {
+    exp: activeCats("exp").map(c => ({ id: c.id, name: c.name, limit: +state.limits[c.id] || 0 })),
+    inc: activeCats("inc").map(c => ({ id: c.id, name: c.name })),
+  };
+  state.editLimits = true;
+}
+function stopCatsEdit() {
+  state.editLimits = false;
+  state.draft = null;
+}
+function renderCatsEdit(force) {
+  const box = $("cats");
+  if (!force && box.dataset.mode === "edit") return;   // nie kasuj tego, co ktoś właśnie wpisuje
+  box.dataset.mode = "edit";
+  const d = state.draft;
+  const row = (type, c, i) => `<div class="cat-edit ${type}">
+      <input class="name-input" id="cn-${type}-${i}" data-type="${type}" data-i="${i}" data-f="name" value="${esc(c.name)}" maxlength="30" placeholder="Nazwa kategorii" aria-label="Nazwa kategorii">
+      ${type === "exp" ? `<span class="lim"><input class="limit-input" id="cl-${i}" data-type="exp" data-i="${i}" data-f="limit" inputmode="decimal" value="${c.limit}" aria-label="Miesięczny limit: ${esc(c.name)}"><span class="tx-cat">zł</span></span>` : ""}
+      <button type="button" class="tx-del" data-del="${type}:${i}" aria-label="Usuń kategorię ${esc(c.name)}">×</button>
+    </div>`;
+  box.innerHTML = `<span class="label">Wydatki: nazwa i limit na miesiąc</span>` +
+    d.exp.map((c, i) => row("exp", c, i)).join("") +
+    `<button type="button" class="link" data-add="exp">+ Dodaj kategorię wydatków</button>
+    <span class="label">Przychody</span>` +
+    d.inc.map((c, i) => row("inc", c, i)).join("") +
+    `<button type="button" class="link" data-add="inc">+ Dodaj kategorię przychodów</button>
+    <p class="form-msg" id="cats-msg" aria-live="polite"></p>
+    <div class="limits-actions"><button type="button" class="primary" id="save-cats">Zapisz kategorie</button><button type="button" class="ghost" id="cancel-cats">Anuluj</button></div>
+    <p class="tx-cat" style="margin:0">Usunięcie kategorii nie kasuje wpisów. Stare wpisy zachowają jej nazwę. Zmiany widzą wszyscy domownicy.</p>`;
+}
+function saveCats() {
+  const msg = $("cats-msg");
+  const d = state.draft;
+  for (const type of ["exp", "inc"]) {
+    const seen = new Set();
+    for (const c of d[type]) {
+      c.name = c.name.trim();
+      if (!c.name) { msg.textContent = "Wpisz nazwę każdej kategorii albo usuń pustą."; return; }
+      const k = c.name.toLowerCase();
+      if (seen.has(k)) { msg.textContent = `Kategoria „${c.name}” występuje dwa razy. Zmień jedną z nazw.`; return; }
+      seen.add(k);
+    }
+  }
+  const prev = cats();
+  const next = {};
+  for (const type of ["exp", "inc"]) {
+    const kept = d[type].map(c => ({ id: c.id, name: c.name }));
+    const removed = (prev[type] || []).filter(c => !kept.some(k => k.id === c.id)).map(c => ({ id: c.id, name: c.name, del: true }));
+    next[type] = [...kept, ...removed];
+  }
+  const lim = {};
+  for (const c of d.exp) lim[c.id] = Math.max(0, parseAmount(c.limit) || 0);
+  state.house = { ...state.house, cats: next };
+  state.limits = lim;
+  stopCatsEdit();
+  updateDoc(houseRef(), { cats: next, limits: lim }).catch(fail);
+  render();
+  toast("Zapisano kategorie");
 }
 
 function niceMax(v) {
@@ -978,15 +1045,36 @@ $("list").addEventListener("click", e => {
   if (!removed) return;
   const ref = doc(txCol(), removed.id);
   deleteDoc(ref).catch(fail);
-  toast(`Usunięto: ${removed.n || CAT_NAME[removed.c]}`, { label: "Cofnij", fn: () => setDoc(ref, txDoc(removed, removed.by)).catch(fail) });
+  toast(`Usunięto: ${removed.n || catName(removed.c)}`, { label: "Cofnij", fn: () => setDoc(ref, txDoc(removed, removed.by)).catch(fail) });
+});
+$("cats").addEventListener("input", e => {
+  const el = e.target;
+  if (!state.draft || !el.dataset.f) return;
+  state.draft[el.dataset.type][+el.dataset.i][el.dataset.f] = el.value;
 });
 $("cats").addEventListener("click", e => {
+  if (state.editLimits) {
+    const add = e.target.closest("[data-add]"), del = e.target.closest("[data-del]");
+    if (add) {
+      const type = add.dataset.add;
+      state.draft[type].push(type === "exp" ? { id: "k" + uid6(), name: "", limit: 0 } : { id: "k" + uid6(), name: "" });
+      renderCatsEdit(true);
+      $(`cn-${type}-${state.draft[type].length - 1}`).focus();
+    } else if (del) {
+      const [type, i] = del.dataset.del.split(":");
+      if (state.draft[type].length === 1) { $("cats-msg").textContent = `Musi zostać co najmniej jedna kategoria ${type === "exp" ? "wydatków" : "przychodów"}.`; return; }
+      state.draft[type].splice(+i, 1);
+      renderCatsEdit(true);
+    } else if (e.target.id === "save-cats") saveCats();
+    else if (e.target.id === "cancel-cats") { stopCatsEdit(); render(); }
+    return;
+  }
   const b = e.target.closest("button.cat");
   if (!b) return;
   state.filter = state.filter === b.dataset.cat ? null : b.dataset.cat;
   render();
 });
-$("edit-limits").onclick = () => { state.editLimits = !state.editLimits; render(); };
+$("edit-limits").onclick = () => { if (state.editLimits) stopCatsEdit(); else startCatsEdit(); render(); };
 const shift = n => {
   let { y, m } = state.view; m += n;
   if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
@@ -1081,7 +1169,7 @@ $("export-csv").onclick = () => {
   if (!tx.length) { toast("W tym miesiącu nie ma wpisów do eksportu."); return; }
   const q = v => `"${String(v).replace(/"/g, '""')}"`;
   const lines = ["Data;Rodzaj;Kategoria;Kwota;Opis;Dodał(a)", ...tx.map(t =>
-    [t.d, t.t === "exp" ? "Wydatek" : "Przychód", CAT_NAME[t.c] || t.c, (t.t === "exp" ? -t.a : t.a).toFixed(2).replace(".", ","), t.n || "", t.by || ""].map(q).join(";"))];
+    [t.d, t.t === "exp" ? "Wydatek" : "Przychód", catName(t.c), (t.t === "exp" ? -t.a : t.a).toFixed(2).replace(".", ","), t.n || "", t.by || ""].map(q).join(";"))];
   download(`kasa-domowa-${y}-${pad(m + 1)}.csv`, "﻿" + lines.join("\r\n"), "text/csv;charset=utf-8");
 };
 
