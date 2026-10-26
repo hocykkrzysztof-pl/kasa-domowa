@@ -553,6 +553,9 @@ async function signIn() {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   state.gateMsg = ""; render();
+  // na telefonie logowanie w tej samej karcie; okienko Safari przełączało na inną kartę
+  const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (mobile && location.hostname === FIREBASE_CONFIG.authDomain) return signInWithRedirect(auth, provider);
   try {
     await signInWithPopup(auth, provider);
   } catch (e) {
