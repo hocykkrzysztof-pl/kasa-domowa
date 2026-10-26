@@ -1,6 +1,6 @@
 // Kasa Domowa: działanie offline (pliki aplikacji, biblioteka Firebase i czcionki z pamięci podręcznej).
 // Dane budżetu nie przechodzą przez ten plik: Firebase trzyma własną kopię offline.
-const CACHE = "kasa-domowa-v3";
+const CACHE = "kasa-domowa-v4";
 const FILES = ["./", "index.html", "firebase-config.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 const CACHED_HOSTS = [self.location.origin, "https://www.gstatic.com", "https://fonts.googleapis.com", "https://fonts.gstatic.com"];
 
